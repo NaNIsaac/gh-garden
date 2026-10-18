@@ -42,6 +42,8 @@ All three from the list above shipped.
 - Deleting the last test file from the gist → 422 (a gist can't be empty).
   Harmless now that the real machine's file lives there; worth knowing.
 - Hostname `DESKTOP-SG0F0O8` is unreadable in "On <machine>" → `garden.machine`.
+- `GARDEN_MACHINE=` (empty) wrote a file named `.json` to the gist and showed
+  up as a phantom machine. Empty names now fall through to config/hostname.
 - Cross-machine path verified with a fake machine (`GARDEN_MACHINE=TEST-LAPTOP`
   on the scratch fixtures): this PC printed its 2 unsaved repos. Test file removed.
 

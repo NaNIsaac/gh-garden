@@ -32,13 +32,12 @@ pub fn machine() -> String {
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty());
-    std::env::var("GARDEN_MACHINE")
-        .ok()
+    let env = |k| std::env::var(k).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    env("GARDEN_MACHINE")
         .or(configured)
-        .ok_or(())
-        .or_else(|_| std::env::var("COMPUTERNAME"))
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "unknown".into())
+        .or_else(|| env("COMPUTERNAME"))
+        .or_else(|| env("HOSTNAME"))
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub fn now() -> u64 {
