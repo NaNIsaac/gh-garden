@@ -1,11 +1,11 @@
 //! GitHub account vs this machine. Produces findings; never changes anything.
 
 use crate::{github, local};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     /// Dirty files, unpushed commits or stashes: leaving this machine loses them.
@@ -39,12 +39,22 @@ impl Status {
     }
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Finding {
     pub status: Status,
     pub repo: Option<String>,
     pub path: Option<PathBuf>,
     pub detail: String,
+    /// A shell command that would resolve this. Printed by `--plan`, never run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+impl Finding {
+    fn fix(mut self, cmd: String) -> Self {
+        self.fix = Some(cmd);
+        self
+    }
 }
 
 pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
@@ -65,6 +75,7 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
         repo: repo.map(str::to_string),
         path: path.map(Path::to_path_buf),
         detail,
+        fix: None,
     };
 
     // Origins the account listing doesn't know: maybe renamed, maybe someone else's.
@@ -113,7 +124,10 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
             Some(r) => r.name_with_owner.clone(),
             None => match resolved.get(origin).cloned().flatten() {
                 Some(new) if by_id.contains_key(&new.to_lowercase()) => {
-                    out.push(find(Status::Renamed, Some(&new), p, format!("origin still says {origin}")));
+                    out.push(
+                        find(Status::Renamed, Some(&new), p, format!("origin still says {origin}"))
+                            .fix(format!("git -C {} remote set-url origin https://github.com/{new}.git", q(&l.path))),
+                    );
                     by_id[&new.to_lowercase()].name_with_owner.clone()
                 }
                 Some(other) => {
@@ -134,7 +148,9 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
         // checkout, which reports those; only its own files are news.
         let expected = Path::new(r.owner()).join(r.name());
         if !l.worktree && !same_path(&l.path, &root.join(&expected)) {
-            out.push(find(Status::Misplaced, Some(&id), p, format!("expected {}", expected.display())));
+            let target = root.join(&expected);
+            let f = find(Status::Misplaced, Some(&id), p, format!("expected {}", expected.display()));
+            out.push(if target.exists() { f } else { f.fix(format!("mv {} {}", q(&l.path), q(&target))) });
         }
 
         let mut unsaved = Vec::new();
@@ -153,25 +169,34 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
             if l.untracked > 0 {
                 unsaved.push(format!("{} untracked", l.untracked));
             }
-            out.push(find(Status::Unsaved, Some(&id), p, format!("{} ({on})", unsaved.join(", "))));
+            let f = find(Status::Unsaved, Some(&id), p, format!("{} ({on})", unsaved.join(", ")));
+            // Only clean, committed work has an obvious fix; edits need a human.
+            // A push GitHub would reject (diverged, or commits never fetched) isn't a fix.
+            let behind = matches!(&cmp, Some((_, None))) || matches!(&cmp, Some((_, Some((_, b)))) if *b > 0);
+            let pushable =
+                l.modified == 0 && l.stashes == 0 && l.unpushed > 0 && !behind && !l.head.starts_with('(');
+            out.push(if pushable { f.fix(format!("git -C {} push origin {}", q(&l.path), l.head)) } else { f });
         } else if l.untracked > 0 {
             out.push(find(Status::Untracked, Some(&id), p, format!("{} untracked ({on})", l.untracked)));
         }
 
+        // Fast-forward only when it can't touch work: on that branch, clean tree.
+        let pull = |branch: &str| {
+            (l.head == branch && l.modified == 0)
+                .then(|| format!("git -C {} pull --ff-only", q(&l.path)))
+                .unwrap_or_else(|| format!("git -C {} fetch origin", q(&l.path)))
+        };
         match cmp.filter(|_| !l.worktree) {
-            Some((branch, None)) => out.push(find(
-                Status::Behind,
-                Some(&id),
-                p,
-                format!("GitHub {branch} has commits never fetched here"),
-            )),
+            Some((branch, None)) => out.push(
+                find(Status::Behind, Some(&id), p, format!("GitHub {branch} has commits never fetched here"))
+                    .fix(pull(&branch)),
+            ),
             Some((branch, Some((ahead, behind)))) if behind > 0 => {
-                let (status, detail) = if ahead > 0 {
-                    (Status::Diverged, format!("{branch}: {ahead} ahead, {behind} behind"))
+                out.push(if ahead > 0 {
+                    find(Status::Diverged, Some(&id), p, format!("{branch}: {ahead} ahead, {behind} behind"))
                 } else {
-                    (Status::Behind, format!("{branch}: {behind} behind"))
-                };
-                out.push(find(status, Some(&id), p, detail));
+                    find(Status::Behind, Some(&id), p, format!("{branch}: {behind} behind")).fix(pull(&branch))
+                });
             }
             _ => {}
         }
@@ -184,7 +209,11 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
     for r in &remotes {
         if !seen.contains(&r.name_with_owner.to_lowercase()) && !r.is_archived {
             let detail = if r.is_fork { "fork".into() } else { String::new() };
-            out.push(find(Status::NotCloned, Some(&r.name_with_owner), None, detail));
+            let target = root.join(r.owner()).join(r.name());
+            out.push(
+                find(Status::NotCloned, Some(&r.name_with_owner), None, detail)
+                    .fix(format!("gh repo clone {} {}", r.name_with_owner, q(&target))),
+            );
         }
     }
 
@@ -202,6 +231,11 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
 
     out.sort_by(|a, b| (a.status, &a.repo, &a.path).cmp(&(b.status, &b.repo, &b.path)));
     Ok(out)
+}
+
+/// Quoted, forward-slashed path: pastes into bash and PowerShell alike.
+fn q(p: &Path) -> String {
+    format!("\"{}\"", p.to_string_lossy().replace('\\', "/"))
 }
 
 /// Windows and macOS filesystems are case-insensitive; GitHub names are too.

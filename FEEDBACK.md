@@ -29,3 +29,27 @@ Not covered: in-account rename (no renamed repo to test with).
 1. Machine snapshot (private gist) so the laptop sees lab-PC unsaved work.
 2. `--plan`: print the fix commands (clone, set-url, rename folder), run nothing.
 3. Exit code ≠ 0 when not safe, for a shutdown/logoff hook.
+
+Acted on: ponyhead-final → ponyhead (folder rename, owner approved).
+
+## 2026-10-18 — v0.2: `--plan`, `snapshot`, exit 2
+
+All three from the list above shipped.
+
+**Trial and error**
+- `--plan` first offered `git push` for a *diverged* repo — GitHub would
+  reject it. Push is now only offered when clean, stash-free and not behind.
+- Deleting the last test file from the gist → 422 (a gist can't be empty).
+  Harmless now that the real machine's file lives there; worth knowing.
+- Hostname `DESKTOP-SG0F0O8` is unreadable in "On <machine>" → `garden.machine`.
+- Cross-machine path verified with a fake machine (`GARDEN_MACHINE=TEST-LAPTOP`
+  on the scratch fixtures): this PC printed its 2 unsaved repos. Test file removed.
+
+**Open questions from real use**
+- `--plan` offers `gh repo clone NaNIsaac/cpython`: a fork of a huge repo,
+  pushed today from somewhere else. Clone plan should probably say size, or
+  forks should be opt-in.
+- Snapshots go stale silently. Only `snapshot` writes them, so it needs a
+  habit or a hook (logoff task running `gh garden snapshot`).
+- 4 repos hold uncommitted edits. The tool can see them; only the owner
+  can decide to commit, stash or drop.
