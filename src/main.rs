@@ -27,6 +27,14 @@ Machine name is $GARDEN_MACHINE, `git config --global garden.machine`,
 or the hostname.";
 
 fn main() {
+    // `gh garden reconcile | head` closes stdout early; that's not a crash.
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if info.to_string().contains("failed printing to stdout") {
+            exit(0);
+        }
+        default(info)
+    }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (mut root, mut json, mut plan, mut cmd) = (None, false, false, None);
     let mut it = args.iter();
