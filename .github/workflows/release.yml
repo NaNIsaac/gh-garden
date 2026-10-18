@@ -1,0 +1,28 @@
+# Tag v* → binaries named the way `gh extension install` looks for them.
+# ponytail: Windows + Linux only; macOS runners bill 10x on private repos,
+# add darwin-arm64/amd64 rows when a Mac shows up.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest, asset: gh-garden-windows-amd64.exe, bin: gh-garden.exe }
+          - { os: ubuntu-latest, asset: gh-garden-linux-amd64, bin: gh-garden }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --release
+      - run: cargo build --release
+      - shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "target/release/${{ matrix.bin }}" "${{ matrix.asset }}"
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes || true
+          gh release upload "$GITHUB_REF_NAME" "${{ matrix.asset }}" --clobber

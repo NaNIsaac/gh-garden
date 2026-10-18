@@ -1,6 +1,6 @@
 [package]
 name = "gh-garden"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "See what differs between your GitHub account and this machine."
 license = "MIT"

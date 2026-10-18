@@ -26,15 +26,9 @@ pub fn keep(status: Status) -> bool {
 }
 
 pub fn machine() -> String {
-    let configured = Command::new("git")
-        .args(["config", "--global", "garden.machine"])
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty());
     let env = |k| std::env::var(k).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     env("GARDEN_MACHINE")
-        .or(configured)
+        .or_else(|| crate::git_config("garden.machine"))
         .or_else(|| env("COMPUTERNAME"))
         .or_else(|| env("HOSTNAME"))
         .unwrap_or_else(|| "unknown".into())
@@ -44,25 +38,26 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-pub fn save(snap: &Snapshot) -> Result<String, String> {
-    let file = format!("{}.json", snap.machine);
-    let content = serde_json::to_string_pretty(snap).unwrap();
-    let files = serde_json::json!({ file: { "content": content } });
-    match gist_id()? {
-        Some(id) => {
-            gh(&["api", &format!("gists/{id}"), "-X", "PATCH", "--input", "-", "--jq", ".html_url"],
-               &serde_json::json!({ "files": files }))
-        }
-        None => gh(
-            &["api", "gists", "-X", "POST", "--input", "-", "--jq", ".html_url"],
+/// Write `snap` (if any) and return every machine's snapshot, in two gh calls:
+/// the write's response already carries all files.
+pub fn sync(snap: Option<&Snapshot>) -> Result<Vec<Snapshot>, String> {
+    const JQ: &str = "[.files[].content]";
+    let files = snap.map(|s| {
+        let content = serde_json::to_string_pretty(s).unwrap();
+        serde_json::json!({ format!("{}.json", s.machine): { "content": content } })
+    });
+    let raw = match (gist_id()?, files) {
+        (Some(id), Some(files)) => gh(
+            &["api", &format!("gists/{id}"), "-X", "PATCH", "--input", "-", "--jq", JQ],
+            &serde_json::json!({ "files": files }),
+        )?,
+        (Some(id), None) => gh(&["api", &format!("gists/{id}"), "--jq", JQ], &serde_json::Value::Null)?,
+        (None, Some(files)) => gh(
+            &["api", "gists", "-X", "POST", "--input", "-", "--jq", JQ],
             &serde_json::json!({ "description": DESCRIPTION, "public": false, "files": files }),
-        ),
-    }
-}
-
-pub fn load() -> Result<Vec<Snapshot>, String> {
-    let Some(id) = gist_id()? else { return Ok(Vec::new()) };
-    let raw = gh(&["api", &format!("gists/{id}"), "--jq", "[.files[].content]"], &serde_json::Value::Null)?;
+        )?,
+        (None, None) => return Ok(Vec::new()),
+    };
     let contents: Vec<String> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     // A file someone hand-edited into garbage shouldn't hide the others.
     Ok(contents.iter().filter_map(|c| serde_json::from_str(c).ok()).collect())

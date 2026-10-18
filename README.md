@@ -29,26 +29,41 @@ Exit code 2 when the answer is no.
 ## Several machines
 
 A switched-off machine can't be asked. So each machine leaves a note:
-
-```
-gh garden snapshot
-```
-
-writes this machine's unsaved / untracked / diverged repos into a secret gist
-named `gh-garden state` (one file per machine). `reconcile` on any other
-machine then ends with what each one last reported, and how long ago.
+every `gh garden` run from the configured `garden.root` writes this machine's
+unsaved / untracked / diverged repos into a secret gist named
+`gh-garden state` (one file per machine), then shows what every other machine
+last reported and how long ago. `gh garden snapshot` forces the note for any
+root. A `--root` elsewhere (a test folder) never overwrites the note.
 
 The gist holds repo names, paths and counts, never file contents.
 Secret gists are unlisted, not private: anyone with the URL can read it.
 
+## Navigate
+
+Local only, no GitHub call:
+
+```
+gh garden path qoraph          # D:\Projects\NaNIsaac\QoraPhase
+cd (gh garden path qoraph)     # PowerShell; bash: cd "$(gh garden path qoraph)"
+gh garden open codigest        # git config garden.editor, default `code`
+gh garden path                 # every repo, one per line (pipe to fzf)
+```
+
+Exact folder name wins; otherwise a substring of `<owner>/<repo>`.
+Several matches → it lists them and exits 1.
+
 ## Install
 
+Windows or Linux, no Rust needed:
+
 ```
-cargo build --release
-copy target\release\gh-garden.exe .
-gh extension install .
+gh extension install NaNIsaac/gh-garden
 git config --global garden.root D:/Projects
 git config --global garden.machine lab
+gh garden
 ```
 
-Rebuild → copy the exe again; `gh` runs the copy in the repo root.
+Update: `gh extension upgrade garden`. Releases come from tags `v*`.
+
+From source: `cargo build --release`, copy the binary to the repo root,
+`gh extension install .`. Rebuild → copy again; `gh` runs the copy.

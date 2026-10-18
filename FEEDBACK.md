@@ -58,3 +58,27 @@ All three from the list above shipped.
   habit or a hook (logoff task running `gh garden snapshot`).
 - 4 repos hold uncommitted edits. The tool can see them; only the owner
   can decide to commit, stash or drop.
+
+## 2026-10-18 — v0.3: auto note, navigator, releases
+
+**Why each**
+- Staleness was the top open question → every `gh garden` from the
+  configured root now leaves the note (2 gh calls: list gists + PATCH, whose
+  response already carries every machine's file). Other roots never write.
+- Lab PC install needed Rust → release workflow, `gh extension install`.
+- Navigator was in the original plan and costs no GitHub call.
+- cpython clone plan now says `fork, 634 MB`.
+
+**Trial and error**
+- `path` printed `D:/03_Develop\NaNIsaac\QoraPhase` (git config root uses `/`)
+  → roots are normalized to the native separator everywhere.
+- Ambiguous `path qora` listed names lowercased → original case kept.
+- `cd (gh garden path codigest)` verified in PowerShell; `open` verified with
+  `garden.editor=echo` and a missing editor (clean error, exit 1).
+- TraTT gained 2 commits mid-session (owner's live work) → reported, not pushed.
+
+**Next**
+- Lab PC: install from release, set `garden.machine lab`, run once.
+- Machines' notes say "N unpushed" but not whether GitHub has caught up since;
+  could cross-check the note's repos against GitHub heads.
+- `--plan` could group commands per machine once notes include branch heads.

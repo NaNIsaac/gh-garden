@@ -11,15 +11,21 @@ const USAGE: &str = "\
 gh garden — what differs between your GitHub account and your machines
 
 USAGE
-  gh garden reconcile [--root <dir>] [--plan] [--json]
-  gh garden snapshot  [--root <dir>]
+  gh garden [reconcile] [--root <dir>] [--plan] [--json]
+  gh garden snapshot    [--root <dir>]
+  gh garden path [<query>]
+  gh garden open <query>
 
-reconcile  Compare GitHub with this machine; also show what other machines
-           last reported. Read-only. Exit 2 if work here isn't on GitHub.
+reconcile  Compare GitHub with this machine, then show what your other
+           machines last reported. Never touches a repo. Exit 2 if work
+           here isn't on GitHub. With the configured root it also leaves
+           this machine's note in your secret gist \"gh-garden state\".
   --plan   Print the commands that would fix each finding. Runs nothing.
   --json   Findings for this machine as JSON.
-snapshot   reconcile, then record this machine's unsaved work in your
-           secret gist \"gh-garden state\" so your other machines see it.
+snapshot   reconcile and leave the note, whatever the root.
+path       Path of the local repo matching <query> (all repos if none):
+             cd (gh garden path qoraph)
+open       Open that repo in `git config garden.editor` (default: code).
 
 Root is --root, or `git config --global garden.root`.
 Repos are expected at <root>/<owner>/<repo>.
@@ -36,7 +42,8 @@ fn main() {
         default(info)
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut root, mut json, mut plan, mut cmd) = (None, false, false, None);
+    let (mut root, mut json, mut plan) = (None, false, false);
+    let mut pos: Vec<&str> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -44,22 +51,28 @@ fn main() {
             "--json" => json = true,
             "--plan" => plan = true,
             "-h" | "--help" | "help" => return println!("{USAGE}"),
-            c if cmd.is_none() && !c.starts_with('-') => cmd = Some(c.to_string()),
+            c if !c.starts_with('-') => pos.push(c),
             other => die(&format!("unknown argument: {other}\n\n{USAGE}")),
         }
     }
-    let snapshot = match cmd.as_deref() {
-        Some("reconcile") | Some("status") | None => false,
-        Some("snapshot") => true,
-        Some(c) => die(&format!("unknown command: {c}\n\n{USAGE}")),
-    };
-
-    let root = root.or_else(config_root).unwrap_or_else(|| {
+    let configured = config_root();
+    let root = root.map(native).or_else(|| configured.clone()).unwrap_or_else(|| {
         die("no root. Pass --root <dir> or run: git config --global garden.root <dir>")
     });
     if !root.is_dir() {
         die(&format!("root is not a directory: {}", root.display()));
     }
+
+    let snapshot = match pos.as_slice() {
+        [] | ["reconcile" | "status"] => false,
+        ["snapshot"] => true,
+        ["path", q @ ..] if q.len() <= 1 => return navigate(&root, q.first().copied(), false),
+        ["open", q] => return navigate(&root, Some(q), true),
+        _ => die(&format!("unknown command: {}\n\n{USAGE}", pos.join(" "))),
+    };
+    // Every look from the usual root refreshes this machine's note, so the
+    // others never see a stale one just because nobody ran `snapshot`.
+    let save = snapshot || configured.is_some_and(|c| reconcile::same_path(&c, &root));
 
     let findings = reconcile::run(&root).unwrap_or_else(|e| die(&format!("GitHub: {e}")));
     let unsafe_here = findings.iter().any(|f| f.status == Status::Unsaved);
@@ -70,11 +83,7 @@ fn main() {
         print_plan(&findings);
     } else {
         print(&root, &findings);
-        if snapshot {
-            save(&root, findings);
-        } else {
-            print_elsewhere();
-        }
+        sync(&root, &findings, save);
     }
     if unsafe_here {
         exit(2);
@@ -129,28 +138,24 @@ fn print_plan(findings: &[Finding]) {
     }
 }
 
-fn save(root: &Path, findings: Vec<Finding>) {
-    let snap = state::Snapshot {
-        machine: state::machine(),
+fn sync(root: &Path, findings: &[Finding], save: bool) {
+    let me = state::machine();
+    let snap = save.then(|| state::Snapshot {
+        machine: me.clone(),
         root: root.display().to_string(),
         at: state::now(),
-        findings: findings.into_iter().filter(|f| state::keep(f.status)).collect(),
-    };
-    match state::save(&snap) {
-        Ok(url) => println!("\nSnapshot of {} saved: {url}", snap.machine),
-        Err(e) => die(&format!("snapshot not saved: {e}")),
-    }
-}
-
-fn print_elsewhere() {
-    let me = state::machine();
-    let snaps = match state::load() {
+        findings: findings.iter().filter(|f| state::keep(f.status)).cloned().collect(),
+    });
+    let snaps = match state::sync(snap.as_ref()) {
         Ok(s) => s,
-        Err(e) => return eprintln!("\n(other machines unknown: {e})"),
+        Err(e) => return eprintln!("\n(other machines unknown, nothing saved: {e})"),
     };
+    if save {
+        println!("Note left for your other machines as \"{me}\".");
+    }
     let others: Vec<_> = snaps.iter().filter(|s| !s.machine.eq_ignore_ascii_case(&me)).collect();
     if others.is_empty() {
-        return println!("\nNo other machine has reported. Run `gh garden snapshot` on each one.");
+        return println!("\nNo other machine has reported. Run `gh garden` on each one.");
     }
     for s in others {
         let unsaved: Vec<_> = s.findings.iter().filter(|f| f.status == Status::Unsaved).collect();
@@ -164,10 +169,55 @@ fn print_elsewhere() {
     }
 }
 
+/// Local only, no GitHub call: fast enough for `cd (gh garden path x)`.
+fn navigate(root: &Path, query: Option<&str>, open: bool) {
+    let repos = local::find_repos(root);
+    let rel = |p: &Path| p.strip_prefix(root).unwrap_or(p).to_string_lossy().replace('\\', "/");
+    let Some(q) = query.map(str::to_lowercase) else {
+        return repos.iter().for_each(|p| println!("{}", p.display()));
+    };
+    // Exact folder name wins; otherwise anything whose <owner>/<repo> contains it.
+    let exact: Vec<_> = repos
+        .iter()
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase() == q))
+        .collect();
+    let hits = if exact.is_empty() { repos.iter().filter(|p| rel(p).to_lowercase().contains(&q)).collect() } else { exact };
+    let path = match hits.as_slice() {
+        [one] => *one,
+        [] => die(&format!("no repo under {} matches \"{q}\"", root.display())),
+        many => {
+            let names: Vec<_> = many.iter().map(|p| rel(p)).collect();
+            die(&format!("\"{q}\" matches {}: {}", many.len(), names.join(", ")))
+        }
+    };
+    if !open {
+        return println!("{}", path.display());
+    }
+    let editor = git_config("garden.editor").unwrap_or_else(|| "code".into());
+    // Windows editors are often .cmd shims (code.cmd), which only cmd can run.
+    let status = if cfg!(windows) {
+        Command::new("cmd").args(["/C", &editor]).arg(path).status()
+    } else {
+        Command::new(&editor).arg(path).status()
+    };
+    if !status.is_ok_and(|s| s.success()) {
+        die(&format!("could not run {editor} {}", path.display()));
+    }
+}
+
 fn config_root() -> Option<PathBuf> {
-    let out = Command::new("git").args(["config", "--global", "garden.root"]).output().ok()?;
+    git_config("garden.root").map(PathBuf::from).map(native)
+}
+
+/// `D:/Projects` from git config would print as `D:/Projects\owner\repo`.
+fn native(p: PathBuf) -> PathBuf {
+    PathBuf::from(p.to_string_lossy().replace('/', std::path::MAIN_SEPARATOR_STR))
+}
+
+pub fn git_config(key: &str) -> Option<String> {
+    let out = Command::new("git").args(["config", "--global", key]).output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !s.is_empty()).then(|| PathBuf::from(s))
+    (out.status.success() && !s.is_empty()).then_some(s)
 }
 
 fn die(msg: &str) -> ! {

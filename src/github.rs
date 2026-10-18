@@ -10,6 +10,8 @@ pub struct Repo {
     pub name_with_owner: String,
     pub is_fork: bool,
     pub is_archived: bool,
+    /// Kilobytes, as GitHub reports it.
+    pub disk_usage: Option<u64>,
     pub default_branch_ref: Option<BranchRef>,
 }
 
@@ -38,7 +40,7 @@ query($endCursor: String) {
   viewer {
     repositories(first: 100, after: $endCursor, ownerAffiliations: [OWNER, ORGANIZATION_MEMBER]) {
       nodes {
-        nameWithOwner isFork isArchived
+        nameWithOwner isFork isArchived diskUsage
         defaultBranchRef { name target { oid } }
       }
       pageInfo { hasNextPage endCursor }

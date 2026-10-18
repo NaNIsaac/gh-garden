@@ -39,7 +39,7 @@ impl Status {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Finding {
     pub status: Status,
     pub repo: Option<String>,
@@ -208,7 +208,12 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
 
     for r in &remotes {
         if !seen.contains(&r.name_with_owner.to_lowercase()) && !r.is_archived {
-            let detail = if r.is_fork { "fork".into() } else { String::new() };
+            let size = match r.disk_usage.unwrap_or(0) {
+                kb if kb >= 1 << 20 => format!("{:.1} GB", kb as f64 / (1 << 20) as f64),
+                kb if kb >= 1 << 10 => format!("{} MB", kb >> 10),
+                kb => format!("{kb} KB"),
+            };
+            let detail = if r.is_fork { format!("fork, {size}") } else { size };
             let target = root.join(r.owner()).join(r.name());
             out.push(
                 find(Status::NotCloned, Some(&r.name_with_owner), None, detail)
@@ -239,7 +244,7 @@ fn q(p: &Path) -> String {
 }
 
 /// Windows and macOS filesystems are case-insensitive; GitHub names are too.
-fn same_path(a: &Path, b: &Path) -> bool {
+pub fn same_path(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase();
     norm(a) == norm(b)
 }
