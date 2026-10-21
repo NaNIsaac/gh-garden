@@ -67,3 +67,33 @@ Update: `gh extension upgrade garden`. Releases come from tags `v*`.
 
 From source: `cargo build --release`, copy the binary to the repo root,
 `gh extension install .`. Rebuild → copy again; `gh` runs the copy.
+Run these in a clone of this repo.
+
+<!-- test -->
+```sh
+cargo build --release
+```
+
+Copy the binary to the repo root.
+
+<!-- test unix -->
+```sh
+cp target/release/gh-garden .
+```
+
+<!-- test windows -->
+```powershell
+Copy-Item target/release/gh-garden.exe .
+```
+
+<!-- test -->
+```sh
+gh extension install .
+```
+
+Check that `gh` finds it (exits non-zero if not):
+
+<!-- test -->
+```sh
+gh garden --help
+```
