@@ -54,7 +54,7 @@ pub fn inspect(path: &Path) -> Local {
     let mut l = Local {
         path: path.to_path_buf(),
         origin: origin_url.as_deref().and_then(parse_github),
-        origin_url,
+        origin_url: origin_url.as_deref().map(redact_url),
         worktree: std::fs::read_to_string(path.join(".git"))
             .is_ok_and(|s| s.replace('\\', "/").contains("/worktrees/")),
         ..Default::default()
@@ -115,9 +115,27 @@ pub fn parse_github(url: &str) -> Option<String> {
     (!o.is_empty() && !r.is_empty() && parts.next().is_none()).then(|| format!("{o}/{r}"))
 }
 
+/// `user:password@` dropped from a URL before it is printed or saved.
+fn redact_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return url.to_string() };
+    let (authority, tail) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    format!("{scheme}://{host}{tail}")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_github;
+    use super::{parse_github, redact_url};
+
+    #[test]
+    fn redacts_credentials_only() {
+        assert_eq!(redact_url("https://user:tok@gitlab.com/a/b.git"), "https://gitlab.com/a/b.git");
+        assert_eq!(redact_url("https://tok@host"), "https://host");
+        assert_eq!(redact_url("ssh://git@host/a/b"), "ssh://host/a/b");
+        assert_eq!(redact_url("https://github.com/a/b"), "https://github.com/a/b");
+        assert_eq!(redact_url("git@github.com:a/b.git"), "git@github.com:a/b.git");
+        assert_eq!(redact_url("/srv/repos/b.git"), "/srv/repos/b.git");
+    }
 
     #[test]
     fn parses_remote_forms() {

@@ -19,7 +19,8 @@ USAGE
 reconcile  Compare GitHub with this machine, then show what your other
            machines last reported. Never touches a repo. Exit 2 if work
            here isn't on GitHub. With the configured root it also leaves
-           this machine's note in your secret gist \"gh-garden state\".
+           this machine's note in your secret gist \"gh-garden state\"
+           (stop that with `git config --global garden.sync false`).
   --plan   Print the commands that would fix each finding. Runs nothing.
   --json   Findings for this machine as JSON.
 snapshot   reconcile and leave the note, whatever the root.
@@ -72,7 +73,9 @@ fn main() {
     };
     // Every look from the usual root refreshes this machine's note, so the
     // others never see a stale one just because nobody ran `snapshot`.
-    let save = snapshot || configured.is_some_and(|c| reconcile::same_path(&c, &root));
+    // `git config --global garden.sync false` stops this implicit upload; `snapshot` still writes.
+    let usual_root = configured.is_some_and(|c| reconcile::same_path(&c, &root));
+    let save = snapshot || (usual_root && git_config("garden.sync").as_deref() != Some("false"));
 
     let findings = reconcile::run(&root).unwrap_or_else(|e| die(&format!("GitHub: {e}")));
     let unsafe_here = findings.iter().any(|f| f.status == Status::Unsaved);
@@ -194,15 +197,27 @@ fn navigate(root: &Path, query: Option<&str>, open: bool) {
         return println!("{}", path.display());
     }
     let editor = git_config("garden.editor").unwrap_or_else(|| "code".into());
-    // Windows editors are often .cmd shims (code.cmd), which only cmd can run.
-    let status = if cfg!(windows) {
-        Command::new("cmd").args(["/C", &editor]).arg(path).status()
-    } else {
-        Command::new(&editor).arg(path).status()
-    };
-    if !status.is_ok_and(|s| s.success()) {
+    if !launch(&editor, path).is_ok_and(|s| s.success()) {
         die(&format!("could not run {editor} {}", path.display()));
     }
+}
+
+/// Windows editors are often .cmd shims (code.cmd), which only cmd can run.
+/// The path is quoted by hand so a folder name with `&` or `|` stays text; `%`
+/// would still be expanded inside quotes, so such a path is refused.
+#[cfg(windows)]
+fn launch(editor: &str, path: &Path) -> std::io::Result<std::process::ExitStatus> {
+    use std::os::windows::process::CommandExt;
+    let path = path.to_string_lossy();
+    if path.contains(['"', '%']) {
+        return Err(std::io::ErrorKind::InvalidInput.into());
+    }
+    Command::new("cmd").args(["/S", "/C"]).raw_arg(format!("\"{editor} \"{path}\"\"")).status()
+}
+
+#[cfg(not(windows))]
+fn launch(editor: &str, path: &Path) -> std::io::Result<std::process::ExitStatus> {
+    Command::new(editor).arg(path).status()
 }
 
 fn config_root() -> Option<PathBuf> {
