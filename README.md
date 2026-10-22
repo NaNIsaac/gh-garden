@@ -43,7 +43,7 @@ Running from the configured root writes the note on its own; set
 when you ask for it), and delete the gist with `gh gist delete` to remove
 what was already written.
 
-`--plan` single-quotes every path and branch name it puts in a command. A
+`--plan` single-quotes every path and branch name it puts in a command, for bash or PowerShell; the lines are not meant for cmd.exe, where single quotes are not quotes and `&` ends the command. A
 value with a quote or control character gets no command and is listed under
 "Needs you" instead. Origin URLs are printed without `user:password@`.
 

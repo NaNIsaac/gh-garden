@@ -50,11 +50,13 @@ pub struct Local {
 }
 
 pub fn inspect(path: &Path) -> Local {
-    let origin_url = git(path, &["remote", "get-url", "origin"]);
+    // Parsed from the redacted form: the credential is not part of the repository name, and the
+    // raw value then never leaves this function.
+    let origin_url = git(path, &["remote", "get-url", "origin"]).map(|u| redact_url(&u));
     let mut l = Local {
         path: path.to_path_buf(),
         origin: origin_url.as_deref().and_then(parse_github),
-        origin_url: origin_url.as_deref().map(redact_url),
+        origin_url,
         worktree: std::fs::read_to_string(path.join(".git"))
             .is_ok_and(|s| s.replace('\\', "/").contains("/worktrees/")),
         ..Default::default()
@@ -107,6 +109,7 @@ pub fn parse_github(url: &str) -> Option<String> {
         .or_else(|| url.strip_prefix("http://github.com/"))
         .or_else(|| url.strip_prefix("git@github.com:"))
         .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| url.strip_prefix("ssh://github.com/"))
         .or_else(|| url.strip_prefix("git://github.com/"))?;
     let rest = rest.trim_end_matches('/');
     let rest = rest.strip_suffix(".git").unwrap_or(rest);
@@ -115,7 +118,9 @@ pub fn parse_github(url: &str) -> Option<String> {
     (!o.is_empty() && !r.is_empty() && parts.next().is_none()).then(|| format!("{o}/{r}"))
 }
 
-/// `user:password@` dropped from a URL before it is printed or saved.
+/// `user:password@` dropped from a URL before it is printed or saved. Covers the usual
+/// `scheme://userinfo@host/...`; it does not cover a password holding an unencoded `/`, `?` or `#`,
+/// a token in a query string, or the scp-like `user:password@host:path`.
 fn redact_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else { return url.to_string() };
     let (authority, tail) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
@@ -135,6 +140,42 @@ mod tests {
         assert_eq!(redact_url("https://github.com/a/b"), "https://github.com/a/b");
         assert_eq!(redact_url("git@github.com:a/b.git"), "git@github.com:a/b.git");
         assert_eq!(redact_url("/srv/repos/b.git"), "/srv/repos/b.git");
+    }
+
+    /// A throw-away repository whose `origin` is `url`, so `inspect` reads it the way it reads a real one.
+    fn repo_with_origin(tag: &str, url: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("gh-garden-test-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [vec!["init", "-q"], vec!["remote", "add", "origin", url]] {
+            let status = std::process::Command::new("git").arg("-C").arg(&dir).args(&args).status().unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        dir
+    }
+
+    #[test]
+    fn a_github_origin_with_credentials_is_still_github() {
+        for (tag, url) in [
+            ("https", "https://bob:s3cr3t-token@github.com/NaNIsaac/gh-garden.git"),
+            ("tokenonly", "https://s3cr3t-token@github.com/NaNIsaac/gh-garden"),
+            ("ssh", "ssh://git@github.com/NaNIsaac/gh-garden.git"),
+        ] {
+            let dir = repo_with_origin(tag, url);
+            let local = super::inspect(&dir);
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert_eq!(local.origin.as_deref(), Some("NaNIsaac/gh-garden"), "{tag}");
+            assert!(!local.origin_url.unwrap().contains("s3cr3t"), "{tag}");
+        }
+    }
+
+    #[test]
+    fn credentials_never_reach_the_stored_url() {
+        let dir = repo_with_origin("gitlab", "https://alice:s3cr3t-pass@gitlab.example.com/o/r.git");
+        let local = super::inspect(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(local.origin, None);
+        assert_eq!(local.origin_url.as_deref(), Some("https://gitlab.example.com/o/r.git"));
     }
 
     #[test]

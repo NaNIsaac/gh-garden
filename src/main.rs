@@ -22,6 +22,7 @@ reconcile  Compare GitHub with this machine, then show what your other
            this machine's note in your secret gist \"gh-garden state\"
            (stop that with `git config --global garden.sync false`).
   --plan   Print the commands that would fix each finding. Runs nothing.
+           For bash or PowerShell (single-quoted), not cmd.exe.
   --json   Findings for this machine as JSON.
 snapshot   reconcile and leave the note, whatever the root.
 path       Path of the local repo matching <query> (all repos if none):
@@ -75,7 +76,7 @@ fn main() {
     // others never see a stale one just because nobody ran `snapshot`.
     // `git config --global garden.sync false` stops this implicit upload; `snapshot` still writes.
     let usual_root = configured.is_some_and(|c| reconcile::same_path(&c, &root));
-    let save = snapshot || (usual_root && git_config("garden.sync").as_deref() != Some("false"));
+    let save = should_save(snapshot, usual_root, git_config("garden.sync").as_deref());
 
     let findings = reconcile::run(&root).unwrap_or_else(|e| die(&format!("GitHub: {e}")));
     let unsafe_here = findings.iter().any(|f| f.status == Status::Unsaved);
@@ -91,6 +92,12 @@ fn main() {
     if unsafe_here {
         exit(2);
     }
+}
+
+/// `snapshot` always writes; otherwise only a run from the configured root does, unless
+/// `garden.sync` is `false`.
+fn should_save(snapshot: bool, usual_root: bool, sync_setting: Option<&str>) -> bool {
+    snapshot || (usual_root && sync_setting != Some("false"))
 }
 
 fn print(root: &Path, findings: &[Finding]) {
@@ -123,6 +130,10 @@ fn print(root: &Path, findings: &[Finding]) {
 }
 
 fn print_plan(findings: &[Finding]) {
+    if findings.iter().any(|f| f.fix.is_some()) {
+        println!("# For bash or PowerShell, not cmd.exe: arguments are single-quoted.
+");
+    }
     for f in findings.iter().filter(|f| f.fix.is_some()) {
         let what = f.repo.as_deref().unwrap_or("");
         println!("# {}: {what} {}", f.status.title(), f.detail);
@@ -203,16 +214,17 @@ fn navigate(root: &Path, query: Option<&str>, open: bool) {
 }
 
 /// Windows editors are often .cmd shims (code.cmd), which only cmd can run.
-/// The path is quoted by hand so a folder name with `&` or `|` stays text; `%`
-/// would still be expanded inside quotes, so such a path is refused.
+/// Editor and path are quoted by hand so a folder name with `&` or `|`, or an editor path with a
+/// space, stays one argument; `%` would still be expanded inside quotes, so a value with `%` or
+/// `"` is refused.
 #[cfg(windows)]
 fn launch(editor: &str, path: &Path) -> std::io::Result<std::process::ExitStatus> {
     use std::os::windows::process::CommandExt;
     let path = path.to_string_lossy();
-    if path.contains(['"', '%']) {
+    if path.contains(['"', '%']) || editor.contains(['"', '%']) {
         return Err(std::io::ErrorKind::InvalidInput.into());
     }
-    Command::new("cmd").args(["/S", "/C"]).raw_arg(format!("\"{editor} \"{path}\"\"")).status()
+    Command::new("cmd").args(["/S", "/C"]).raw_arg(format!("\"\"{editor}\" \"{path}\"\"")).status()
 }
 
 #[cfg(not(windows))]
@@ -238,4 +250,61 @@ pub fn git_config(key: &str) -> Option<String> {
 fn die(msg: &str) -> ! {
     eprintln!("gh garden: {msg}");
     exit(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_save;
+
+    #[test]
+    fn the_note_is_written_by_snapshot_or_a_run_from_the_usual_root() {
+        assert!(should_save(true, false, None));
+        assert!(should_save(true, false, Some("false")));
+        assert!(should_save(false, true, None));
+        assert!(should_save(false, true, Some("true")));
+        assert!(!should_save(false, false, None));
+    }
+
+    #[test]
+    fn garden_sync_false_stops_only_the_implicit_note() {
+        assert!(!should_save(false, true, Some("false")));
+        assert!(should_save(true, true, Some("false")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launch_passes_the_path_as_one_argument_to_an_editor_with_a_space() {
+        let base = std::env::temp_dir().join(format!("gh-garden-launch-{}", std::process::id()));
+        let editor_dir = base.join("My Editor");
+        let target = base.join("odd&dir $(x)");
+        std::fs::create_dir_all(&editor_dir).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let log = base.join("args.txt");
+        let editor = editor_dir.join("ed.cmd");
+        // `echo "%~1"` keeps a `&` in the argument from ending the echo line; the second line
+        // records whether a second argument arrived.
+        let script = format!(
+            "@echo \"%~1\"> \"{log}\"
+@if \"%~2\"==\"\" (echo ONE>> \"{log}\")
+",
+            log = log.display()
+        );
+        std::fs::write(&editor, script).unwrap();
+
+        let status = super::launch(editor.to_str().unwrap(), &target).unwrap();
+        let logged = std::fs::read_to_string(&log).unwrap();
+        std::fs::remove_dir_all(&base).unwrap();
+
+        assert!(status.success());
+        let quoted = format!("\"{}\"", target.to_str().unwrap());
+        assert_eq!(logged.lines().collect::<Vec<_>>(), [quoted.as_str(), "ONE"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launch_refuses_what_cmd_would_still_expand() {
+        let editor = "ed.cmd";
+        assert!(super::launch(editor, std::path::Path::new("C:/a%PATH%b")).is_err());
+        assert!(super::launch("ed\"x", std::path::Path::new("C:/a")).is_err());
+    }
 }
