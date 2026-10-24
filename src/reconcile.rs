@@ -51,8 +51,9 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn fix(mut self, cmd: String) -> Self {
-        self.fix = Some(cmd);
+    /// `None` (a value that cannot be quoted safely) leaves the finding without a fix.
+    fn fix(mut self, cmd: Option<String>) -> Self {
+        self.fix = cmd;
         self
     }
 }
@@ -126,7 +127,9 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
                 Some(new) if by_id.contains_key(&new.to_lowercase()) => {
                     out.push(
                         find(Status::Renamed, Some(&new), p, format!("origin still says {origin}"))
-                            .fix(format!("git -C {} remote set-url origin https://github.com/{new}.git", q(&l.path))),
+                            .fix(q(&l.path).zip(shell_arg(&format!("https://github.com/{new}.git"))).map(|(p, url)| {
+                                format!("git -C {p} remote set-url origin {url}")
+                            })),
                     );
                     by_id[&new.to_lowercase()].name_with_owner.clone()
                 }
@@ -150,7 +153,7 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
         if !l.worktree && !same_path(&l.path, &root.join(&expected)) {
             let target = root.join(&expected);
             let f = find(Status::Misplaced, Some(&id), p, format!("expected {}", expected.display()));
-            out.push(if target.exists() { f } else { f.fix(format!("mv {} {}", q(&l.path), q(&target))) });
+            out.push(if target.exists() { f } else { f.fix(q(&l.path).zip(q(&target)).map(|(from, to)| format!("mv {from} {to}"))) });
         }
 
         let mut unsaved = Vec::new();
@@ -175,16 +178,15 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
             let behind = matches!(&cmp, Some((_, None))) || matches!(&cmp, Some((_, Some((_, b)))) if *b > 0);
             let pushable =
                 l.modified == 0 && l.stashes == 0 && l.unpushed > 0 && !behind && !l.head.starts_with('(');
-            out.push(if pushable { f.fix(format!("git -C {} push origin {}", q(&l.path), l.head)) } else { f });
+            out.push(if pushable { f.fix(q(&l.path).zip(shell_arg(&l.head)).map(|(p, h)| format!("git -C {p} push origin {h}"))) } else { f });
         } else if l.untracked > 0 {
             out.push(find(Status::Untracked, Some(&id), p, format!("{} untracked ({on})", l.untracked)));
         }
 
         // Fast-forward only when it can't touch work: on that branch, clean tree.
         let pull = |branch: &str| {
-            (l.head == branch && l.modified == 0)
-                .then(|| format!("git -C {} pull --ff-only", q(&l.path)))
-                .unwrap_or_else(|| format!("git -C {} fetch origin", q(&l.path)))
+            let ff = l.head == branch && l.modified == 0;
+            q(&l.path).map(|p| if ff { format!("git -C {p} pull --ff-only") } else { format!("git -C {p} fetch origin") })
         };
         match cmp.filter(|_| !l.worktree) {
             Some((branch, None)) => out.push(
@@ -217,7 +219,7 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
             let target = root.join(r.owner()).join(r.name());
             out.push(
                 find(Status::NotCloned, Some(&r.name_with_owner), None, detail)
-                    .fix(format!("gh repo clone {} {}", r.name_with_owner, q(&target))),
+                    .fix(shell_arg(&r.name_with_owner).zip(q(&target)).map(|(n, t)| format!("gh repo clone {n} {t}"))),
             );
         }
     }
@@ -238,13 +240,48 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
     Ok(out)
 }
 
-/// Quoted, forward-slashed path: pastes into bash and PowerShell alike.
-fn q(p: &Path) -> String {
-    format!("\"{}\"", p.to_string_lossy().replace('\\', "/"))
+/// Single-quoted, so bash and PowerShell both take the text literally (no
+/// `$(...)`, backtick or `!` expansion). `None` if it holds a quote of either
+/// shell (PowerShell also reads the typographic ones as quotes) or a control
+/// character: such a value gets no ready-made command, the plan lists it instead.
+fn shell_arg(s: &str) -> Option<String> {
+    let unquotable = |c: char| c.is_control() || matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}');
+    (!s.chars().any(unquotable)).then(|| format!("'{s}'"))
+}
+
+/// Forward-slashed path as one shell argument: pastes into bash and PowerShell alike.
+fn q(p: &Path) -> Option<String> {
+    shell_arg(&p.to_string_lossy().replace('\\', "/"))
 }
 
 /// Windows and macOS filesystems are case-insensitive; GitHub names are too.
 pub fn same_path(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase();
     norm(a) == norm(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{q, shell_arg};
+    use std::path::Path;
+
+    #[test]
+    fn single_quotes_keep_expansion_syntax_literal() {
+        for text in ["main;calc", "$(calc)", "`calc`", "a&b|c", "x!y", "a b", "한글"] {
+            assert_eq!(shell_arg(text).as_deref(), Some(format!("'{text}'").as_str()));
+        }
+    }
+
+    #[test]
+    fn refuses_what_it_cannot_quote() {
+        for text in ["it's", "\u{2018}x", "x\u{2019}", "a\nb", "a\x1b[0m"] {
+            assert_eq!(shell_arg(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn paths_use_forward_slashes() {
+        assert_eq!(q(Path::new(r"D:\Projects\o\r")).as_deref(), Some("'D:/Projects/o/r'"));
+        assert_eq!(q(Path::new("/tmp/o'r")), None);
+    }
 }

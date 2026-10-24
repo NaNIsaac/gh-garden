@@ -35,8 +35,17 @@ unsaved / untracked / diverged repos into a secret gist named
 last reported and how long ago. `gh garden snapshot` forces the note for any
 root. A `--root` elsewhere (a test folder) never overwrites the note.
 
-The gist holds repo names, paths and counts, never file contents.
+The gist holds repo names (private repos included), absolute local paths,
+the machine name, branch names and counts, never file contents.
 Secret gists are unlisted, not private: anyone with the URL can read it.
+Running from the configured root writes the note on its own; set
+`git config --global garden.sync false` to stop that (`snapshot` still writes
+when you ask for it), and delete the gist with `gh gist delete` to remove
+what was already written.
+
+`--plan` single-quotes every path and branch name it puts in a command, for bash or PowerShell; the lines are not meant for cmd.exe, where single quotes are not quotes and `&` ends the command. A
+value with a quote or control character gets no command and is listed under
+"Needs you" instead. Origin URLs are printed without `user:password@`.
 
 ## Navigate
 
