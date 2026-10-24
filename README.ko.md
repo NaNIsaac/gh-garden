@@ -69,7 +69,6 @@ cp target/release/gh-garden .
 Copy-Item target/release/gh-garden.exe .
 ```
 
-<!-- test -->
 ```sh
 gh extension install .
 ```
