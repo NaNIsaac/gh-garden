@@ -1,6 +1,7 @@
 mod github;
 mod local;
 mod reconcile;
+mod scan;
 mod state;
 
 use reconcile::{Finding, Status};
@@ -18,13 +19,17 @@ USAGE
 
 reconcile  Compare GitHub with this machine, then show what your other
            machines last reported. Never touches a repo. Exit 2 if work
-           here isn't on GitHub. With the configured root it also leaves
-           this machine's note in your secret gist \"gh-garden state\"
-           (stop that with `git config --global garden.sync false`).
+           here isn't on GitHub. It writes nothing to GitHub unless
+           `git config --global garden.sync true` is set (then a run from
+           the configured root leaves this machine's note in your secret
+           gist \"gh-garden state\"). A secret gist is unlisted, not
+           private; the note is checked for credentials, key files and
+           data file names first, and a hit stops the write.
   --plan   Print the commands that would fix each finding. Runs nothing.
            For bash or PowerShell (single-quoted), not cmd.exe.
   --json   Findings for this machine as JSON.
-snapshot   reconcile and leave the note, whatever the root.
+snapshot   reconcile and leave the note, whatever the root and
+           whatever garden.sync says (same check before the write).
 path       Path of the local repo matching <query> (all repos if none):
              cd (gh garden path qoraph)
 open       Open that repo in `git config garden.editor` (default: code).
@@ -72,9 +77,8 @@ fn main() {
         ["open", q] => return navigate(&root, Some(q), true),
         _ => die(&format!("unknown command: {}\n\n{USAGE}", pos.join(" "))),
     };
-    // Every look from the usual root refreshes this machine's note, so the
-    // others never see a stale one just because nobody ran `snapshot`.
-    // `git config --global garden.sync false` stops this implicit upload; `snapshot` still writes.
+    // Nothing is uploaded unless asked: `snapshot`, or `git config --global garden.sync true`
+    // for every look from the usual root.
     let usual_root = configured.is_some_and(|c| reconcile::same_path(&c, &root));
     let save = should_save(snapshot, usual_root, git_config("garden.sync").as_deref());
 
@@ -94,10 +98,10 @@ fn main() {
     }
 }
 
-/// `snapshot` always writes; otherwise only a run from the configured root does, unless
-/// `garden.sync` is `false`.
+/// `snapshot` always writes; otherwise only a run from the configured root with
+/// `garden.sync` set to `true` does.
 fn should_save(snapshot: bool, usual_root: bool, sync_setting: Option<&str>) -> bool {
-    snapshot || (usual_root && sync_setting != Some("false"))
+    snapshot || (usual_root && sync_setting == Some("true"))
 }
 
 fn print(root: &Path, findings: &[Finding]) {
@@ -160,11 +164,27 @@ fn sync(root: &Path, findings: &[Finding], save: bool) {
         at: state::now(),
         findings: findings.iter().filter(|f| state::keep(f.status)).cloned().collect(),
     });
+    // The scan and the upload fail for different reasons and are logged apart.
+    let hits = snap.as_ref().map(scan::scan).unwrap_or_default();
+    let snap = if hits.is_empty() {
+        snap
+    } else {
+        let what: Vec<String> = hits.iter().map(|h| format!("{} in {}", h.rule, h.repo.as_deref().unwrap_or("the machine or root name"))).collect();
+        state::log("scan_blocked", &what.join("; "));
+        eprintln!("\nNot published: the note would carry {}. Fix that, then run `gh garden snapshot`.", what.join("; "));
+        None
+    };
     let snaps = match state::sync(snap.as_ref()) {
         Ok(s) => s,
-        Err(e) => return eprintln!("\n(other machines unknown, nothing saved: {e})"),
+        Err(e) => {
+            if snap.is_some() {
+                state::log("publish_failed", e.lines().next().unwrap_or(""));
+            }
+            return eprintln!("\n(other machines unknown, nothing saved: {e})");
+        }
     };
-    if save {
+    if snap.is_some() {
+        state::log("published", &format!("{} findings", snap.as_ref().map_or(0, |s| s.findings.len())));
         println!("Note left for your other machines as \"{me}\".");
     }
     let others: Vec<_> = snaps.iter().filter(|s| !s.machine.eq_ignore_ascii_case(&me)).collect();
@@ -257,18 +277,19 @@ mod tests {
     use super::should_save;
 
     #[test]
-    fn the_note_is_written_by_snapshot_or_a_run_from_the_usual_root() {
-        assert!(should_save(true, false, None));
-        assert!(should_save(true, false, Some("false")));
-        assert!(should_save(false, true, None));
-        assert!(should_save(false, true, Some("true")));
+    fn nothing_is_uploaded_by_default() {
+        assert!(!should_save(false, true, None));
         assert!(!should_save(false, false, None));
+        assert!(!should_save(false, true, Some("")));
+        assert!(!should_save(false, true, Some("false")));
     }
 
     #[test]
-    fn garden_sync_false_stops_only_the_implicit_note() {
-        assert!(!should_save(false, true, Some("false")));
+    fn the_note_is_written_by_snapshot_or_by_garden_sync_true_from_the_usual_root() {
+        assert!(should_save(true, false, None));
         assert!(should_save(true, true, Some("false")));
+        assert!(should_save(false, true, Some("true")));
+        assert!(!should_save(false, false, Some("true")));
     }
 
     #[cfg(windows)]

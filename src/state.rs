@@ -88,6 +88,29 @@ fn gh(args: &[&str], body: &serde_json::Value) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Where `log` appends: `garden.log` from git config, else the user's state folder.
+fn log_path() -> Option<std::path::PathBuf> {
+    if let Some(p) = crate::git_config("garden.log") {
+        return Some(p.into());
+    }
+    let var = |k| std::env::var_os(k).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    let base = var("LOCALAPPDATA").or_else(|| var("XDG_STATE_HOME")).or_else(|| var("HOME").map(|h| h.join(".local").join("state")))?;
+    Some(base.join("gh-garden").join("log.jsonl"))
+}
+
+/// One JSON line per publish decision: `published`, `scan_blocked` (the check held it back) or
+/// `publish_failed` (gh did not write it). Details name rules and repos, never matched text.
+/// A log that cannot be written is not an error worth stopping for.
+pub fn log(event: &str, detail: &str) {
+    let Some(path) = log_path() else { return };
+    let line = serde_json::json!({ "at": now(), "machine": machine(), "event": event, "detail": detail });
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{line}");
+    }
+}
 pub fn ago(at: u64) -> String {
     let s = now().saturating_sub(at);
     match s {
