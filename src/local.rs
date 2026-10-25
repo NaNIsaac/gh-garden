@@ -1,5 +1,6 @@
 //! Local side. Read-only: no fetch, no checkout, nothing that writes to a repo.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -44,12 +45,20 @@ pub struct Local {
     pub worktree: bool,
     pub modified: usize,
     pub untracked: usize,
-    /// Commits on local branches that no remote-tracking ref contains.
+    /// Commits on local branches that no remote-tracking ref or known GitHub
+    /// head contains.
     pub unpushed: usize,
+    /// Local branches (with their commit count) that have no remote-tracking
+    /// ref and whose GitHub head is unknown: never pushed, or never fetched.
+    /// Their commits are not in `unpushed`; a fetch is needed to decide.
+    pub unfetched: Vec<(String, usize)>,
     pub stashes: usize,
 }
 
-pub fn inspect(path: &Path) -> Local {
+/// GitHub branch heads by `owner/repo` (lowercase): branch name -> commit oid.
+pub type Heads = HashMap<String, HashMap<String, String>>;
+
+pub fn inspect(path: &Path, heads: &Heads) -> Local {
     // Parsed from the redacted form: the credential is not part of the repository name, and the
     // raw value then never leaves this function.
     let origin_url = git(path, &["remote", "get-url", "origin"]).map(|u| redact_url(&u));
@@ -72,9 +81,42 @@ pub fn inspect(path: &Path) -> Local {
             }
         }
     }
-    l.unpushed = count(path, &["rev-list", "--count", "--branches", "--not", "--remotes"]);
+    let repo_heads = l.origin.as_ref().and_then(|o| heads.get(&o.to_lowercase()));
+    (l.unpushed, l.unfetched) = count_unpushed(path, repo_heads);
     l.stashes = count(path, &["rev-list", "--walk-reflogs", "--count", "refs/stash"]);
     l
+}
+
+/// Commits on local branches that no remote-tracking ref contains. A branch with no tracking ref
+/// is compared with GitHub's head of the same name when it is known, so commits already on the
+/// remote are not counted. Branches that cannot be compared come back by name with their count.
+fn count_unpushed(path: &Path, heads: Option<&HashMap<String, String>>) -> (usize, Vec<(String, usize)>) {
+    let Some(branches) = git(path, &["for-each-ref", "--format=%(refname:short)", "refs/heads"]) else {
+        return (0, Vec::new());
+    };
+    let (mut n, mut tracked, mut unfetched) = (0, Vec::new(), Vec::new());
+    for b in branches.lines().filter(|b| !b.is_empty()) {
+        let local = format!("refs/heads/{b}");
+        if git(path, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{b}")]).is_some() {
+            tracked.push(local);
+            continue;
+        }
+        let pending = count(path, &["rev-list", "--count", &local, "--not", "--remotes"]);
+        if pending == 0 {
+            continue;
+        }
+        match heads.and_then(|h| h.get(b)).and_then(|oid| compare(path, b, oid)) {
+            Some((ahead, _)) => n += ahead,
+            None => unfetched.push((b.to_string(), pending)),
+        }
+    }
+    if !tracked.is_empty() {
+        let mut args = vec!["rev-list", "--count"];
+        args.extend(tracked.iter().map(String::as_str));
+        args.extend(["--not", "--remotes"]);
+        n += count(path, &args);
+    }
+    (n, unfetched)
 }
 
 /// Ahead/behind of local `branch` against GitHub's `oid`, without fetching.
@@ -162,7 +204,7 @@ mod tests {
             ("ssh", "ssh://git@github.com/NaNIsaac/gh-garden.git"),
         ] {
             let dir = repo_with_origin(tag, url);
-            let local = super::inspect(&dir);
+            let local = super::inspect(&dir, &super::Heads::new());
             std::fs::remove_dir_all(&dir).unwrap();
             assert_eq!(local.origin.as_deref(), Some("NaNIsaac/gh-garden"), "{tag}");
             assert!(!local.origin_url.unwrap().contains("s3cr3t"), "{tag}");
@@ -172,7 +214,7 @@ mod tests {
     #[test]
     fn credentials_never_reach_the_stored_url() {
         let dir = repo_with_origin("gitlab", "https://alice:s3cr3t-pass@gitlab.example.com/o/r.git");
-        let local = super::inspect(&dir);
+        let local = super::inspect(&dir, &super::Heads::new());
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(local.origin, None);
         assert_eq!(local.origin_url.as_deref(), Some("https://gitlab.example.com/o/r.git"));
@@ -189,5 +231,48 @@ mod tests {
             assert_eq!(parse_github(url).as_deref(), Some("NaNIsaac/QoraPhase"), "{url}");
         }
         assert_eq!(parse_github("https://gitlab.com/a/b"), None);
+    }
+
+    fn git_ok(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git").arg("-C").arg(dir).args(args).status().unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// Two commits on `main`, no remote-tracking ref (never fetched), as in issue #5.
+    fn unfetched_repo(tag: &str) -> (std::path::PathBuf, String) {
+        let dir = repo_with_origin(tag, "https://github.com/NaNIsaac/gh-garden.git");
+        git_ok(&dir, &["checkout", "-q", "-b", "main"]);
+        for msg in ["one", "two"] {
+            std::fs::write(dir.join("work"), msg).unwrap();
+            git_ok(&dir, &["add", "work"]);
+            git_ok(&dir, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg]);
+        }
+        let oid = super::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        (dir, oid)
+    }
+
+    /// Commits already on the same-named GitHub branch are not unpushed work, even when the
+    /// remote-tracking ref was never fetched.
+    #[test]
+    fn untracked_branch_on_remote_is_not_unpushed() {
+        let (dir, oid) = unfetched_repo("on-remote");
+        let heads = super::Heads::from([(
+            "nanisaac/gh-garden".to_string(),
+            std::collections::HashMap::from([("main".to_string(), oid)]),
+        )]);
+        let local = super::inspect(&dir, &heads);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(local.unpushed, 0);
+        assert!(local.unfetched.is_empty());
+    }
+
+    /// A branch GitHub's head is not known for is reported by name with its count, not as pushed.
+    #[test]
+    fn unknown_remote_branch_is_reported() {
+        let (dir, _) = unfetched_repo("unknown");
+        let local = super::inspect(&dir, &super::Heads::new());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(local.unpushed, 0);
+        assert_eq!(local.unfetched, vec![("main".to_string(), 2)]);
     }
 }
