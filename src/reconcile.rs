@@ -64,8 +64,17 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
         remotes.iter().map(|r| (r.name_with_owner.to_lowercase(), r)).collect();
 
     let paths = local::find_repos(root);
+    // Only default branches are known from the listing; other branches without a tracking ref
+    // are reported as unknown rather than guessed.
+    let heads: local::Heads = remotes
+        .iter()
+        .filter_map(|r| {
+            let b = r.default_branch_ref.as_ref()?;
+            Some((r.name_with_owner.to_lowercase(), HashMap::from([(b.name.clone(), b.target.oid.clone())])))
+        })
+        .collect();
     let locals: Vec<local::Local> = std::thread::scope(|s| {
-        let handles: Vec<_> = paths.iter().map(|p| s.spawn(|| local::inspect(p))).collect();
+        let handles: Vec<_> = paths.iter().map(|p| s.spawn(|| local::inspect(p, &heads))).collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
 
@@ -166,6 +175,9 @@ pub fn run(root: &Path) -> Result<Vec<Finding>, String> {
         if !l.worktree {
             note(l.unpushed, "unpushed commits");
             note(l.stashes, "stashes");
+            for (branch, n) in &l.unfetched {
+                unsaved.push(format!("{branch}: {n} commits, remote branch unknown (never pushed or not fetched)"));
+            }
         }
         let on = if l.worktree { format!("worktree on {}", l.head) } else { format!("on {}", l.head) };
         if !unsaved.is_empty() {
