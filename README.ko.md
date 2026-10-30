@@ -33,6 +33,10 @@ git checkout을 찾아 `origin`으로 짝을 맞춘 다음, 두 쪽이 어긋나
 저장소는 절대 바꾸지 않습니다. fetch도, checkout도, commit도 없습니다. GitHub에 대해 아는 것은 전부
 이미 로그인해 둔 `gh` CLI를 거쳐서 얻습니다.
 
+![GitHub 저장소와 로컬 체크아웃 비교 과정 및 모의 터미널 보고서](docs/media/readme-comparison.svg)
+
+*개념 설명용 SVG이며 실제 실험 데이터나 터미널 캡처가 아닙니다.*
+
 ## 설치
 
 `PATH`에 `git`과 [`gh`](https://cli.github.com/)가 있고 `gh auth login`을 마친 상태여야 합니다.
