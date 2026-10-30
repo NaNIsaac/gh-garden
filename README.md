@@ -31,6 +31,10 @@ no, and the exit code says so.
 It never changes a repository: no fetch, no checkout, no commit. Everything it knows about GitHub
 comes through the `gh` CLI you are already signed in with.
 
+![Read-only comparison of GitHub repositories and local clones with a conceptual terminal report](docs/media/readme-comparison.svg)
+
+*Illustrative SVG, not a captured terminal session or measured experimental result.*
+
 ## Install
 
 You need `git` and [`gh`](https://cli.github.com/) on `PATH`, and `gh auth login` done.

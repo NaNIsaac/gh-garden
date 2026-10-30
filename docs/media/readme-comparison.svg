@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="530" viewBox="0 0 1200 530" role="img" aria-labelledby="title description"><title id="title">gh garden compares the local checkout inventory with GitHub</title><desc id="description">Diagram showing GitHub repositories, local folders, a read-only comparison, and status categories such as modified, unpushed, behind and not cloned. The report is illustrative.</desc>
+<rect x="0" y="0" width="1200" height="530" rx="0" fill="#f8fafc" stroke="#f8fafc" stroke-width="2"/>
+<text x="34" y="53" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="30" font-weight="700" fill="#123656">gh garden / what is only on this machine?</text>
+<text x="34" y="82" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#56748b">Read-only inventory before shutting down or switching computers.</text>
+<rect x="34" y="118" width="343" height="189" rx="15" fill="#fff" stroke="#c6d8e8" stroke-width="2"/>
+<text x="58" y="157" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="23" font-weight="700" fill="#1a5d90">GitHub account</text>
+<text x="58" y="199" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#395a71">Repositories &amp; default branches</text>
+<text x="58" y="235" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#395a71">Remote origin and metadata</text>
+<text x="58" y="271" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="16" font-weight="400" fill="#60809a">Via authenticated gh CLI</text>
+<rect x="423" y="118" width="343" height="189" rx="15" fill="#fff" stroke="#c6d8e8" stroke-width="2"/>
+<text x="447" y="157" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="23" font-weight="700" fill="#1a5d90">Local checkout root</text>
+<text x="447" y="199" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#395a71">Git working trees &amp; stashes</text>
+<text x="447" y="235" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#395a71">Uncommitted / unpushed work</text>
+<text x="447" y="271" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="16" font-weight="400" fill="#60809a">Folder and origin paths</text>
+<rect x="810" y="118" width="354" height="189" rx="15" fill="#fff" stroke="#c6d8e8" stroke-width="2"/>
+<text x="834" y="157" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="23" font-weight="700" fill="#1a5d90">Compare, do not modify</text>
+<text x="834" y="199" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#395a71">Modified  /  unpushed</text>
+<text x="834" y="235" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#395a71">Behind  /  not cloned</text>
+<text x="834" y="271" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="16" font-weight="400" fill="#60809a">Plan printed, never executed</text>
+<path d="M381,217 L401,217 M390,208 L401,217 L390,226" fill="none" stroke="#527ea3" stroke-width="3" stroke-linecap="round"/>
+<path d="M770,217 L790,217 M779,208 L790,217 L779,226" fill="none" stroke="#527ea3" stroke-width="3" stroke-linecap="round"/>
+<rect x="34" y="336" width="1130" height="150" rx="15" fill="#1c334a" stroke="#1c334a" stroke-width="2"/>
+<text x="57" y="367" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="15" font-weight="700" fill="#a6c9e4">TERMINAL / ILLUSTRATIVE WORKFLOW</text>
+<text x="57" y="405" font-family="Consolas, monospace" font-size="21" font-weight="400" fill="#d8edf8">$ gh garden</text>
+<text x="57" y="438" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="18" font-weight="400" fill="#f7dba2">Work not on GitHub  |  Behind GitHub  |  Not cloned here</text>
+<text x="57" y="466" font-family="Consolas, monospace" font-size="17" font-weight="400" fill="#c4e2f4">$ gh garden --plan       # prints commands; does not run them</text>
+<text x="34" y="515" font-family="Noto Sans CJK KR, Malgun Gothic, Arial, sans-serif" font-size="15" font-weight="400" fill="#617d94">Actual repo counts and safety verdict depend on the current machine; this is not a captured run.</text></svg>
